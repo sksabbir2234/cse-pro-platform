@@ -3,7 +3,8 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 export const firebaseConfig = {
-  apiKey: "AIzaSyB7wsNGTb-9AxQhmDMRowes3i4BMYxkIiI",
+  // VITE_ ব্যবহার করলে Vite অটোমেটিক এনভায়রনমেন্ট ভ্যারিয়েবল চিনে নেয়
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyB7wsNGTb-9AxQhmDMRowes3i4BMYxkIiI",
   authDomain: "personal--blog.firebaseapp.com",
   projectId: "personal--blog",
   storageBucket: "personal--blog.firebasestorage.app",
@@ -16,5 +17,5 @@ const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const appId = 'cse-ultimate-tabs-v1'; // This is your internal app identifier
-export const apiKey = firebaseConfig.apiKey; // Used for Gemini calls
+export const appId = 'cse-ultimate-tabs-v1';
+export const apiKey = firebaseConfig.apiKey;
