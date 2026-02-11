@@ -38,7 +38,7 @@ import {
 import { firebaseConfig, appId, auth, db } from './config';
 
 // YOUR UNIQUE ADMIN UID
-const ADMIN_UID = 'HCXmb5iV5XezLb86PbPr9XTSDAg1';
+const ADMIN_UID = 'poIxGXY4CdQvrOVgHjwex6SPd6z1';
 
 export default function App() {
   const [user, setUser] = useState(null);
