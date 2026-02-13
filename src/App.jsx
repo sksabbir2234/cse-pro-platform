@@ -29,6 +29,7 @@ import LessonViewer from './components/LessonViewer';
 import EditModal from './components/EditModal';
 import ReorderTopicsModal from './components/ReorderTopicsModal';
 import SearchResults from './components/SearchResults';
+import FlashcardsPage from './components/FlashcardsPage';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -55,6 +56,12 @@ export default function App() {
   const [topicOrder, setTopicOrder] = useState([]);
   const [isReorderOpen, setIsReorderOpen] = useState(false);
   const [tempTopicOrder, setTempTopicOrder] = useState([]);
+  const [showFlashcards, setShowFlashcards] = useState(false);
+  const [selectedFlashcardTopic, setSelectedFlashcardTopic] = useState(null);
+  const [studySession, setStudySession] = useState([]);
+  const [currentFlashcardIndex, setCurrentFlashcardIndex] = useState(0);
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
+  const [flashcards, setFlashcards] = useState([]);
 
   const isAdmin = user && user.uid === ADMIN_UID;
 
@@ -111,6 +118,18 @@ export default function App() {
     return unsub;
   }, [user]);
 
+  // ==================== FLASHCARDS DATA ====================
+  useEffect(() => {
+    if (!user) return;
+    const unsub = onSnapshot(
+      collection(db, 'artifacts', appId, 'public', 'data', 'flashcards'),
+      (snap) => {
+        setFlashcards(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      },
+    );
+    return unsub;
+  }, [user]);
+
   const activeChapter = useMemo(
     () => chapters.find((c) => c.id === activeChapterId),
     [chapters, activeChapterId],
@@ -132,6 +151,15 @@ export default function App() {
     return Math.round((masteredIds.length / chapters.length) * 100);
   }, [masteredIds, chapters]);
 
+  const flashcardsByTopic = useMemo(() => {
+    const grouped = {};
+    flashcards.forEach((f) => {
+      if (!grouped[f.topic]) grouped[f.topic] = [];
+      grouped[f.topic].push(f);
+    });
+    return grouped;
+  }, [flashcards]);
+
   // ==================== SEARCH FILTER ====================
   const searchResults = useMemo(() => {
     if (!searchQuery) return [];
@@ -141,6 +169,154 @@ export default function App() {
         c.title.toLowerCase().includes(q) || c.topic.toLowerCase().includes(q),
     );
   }, [chapters, searchQuery]);
+
+  const handleCSVUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target.result.trim();
+      const lines = text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line);
+
+      if (lines.length < 1) {
+        alert('CSV file is empty');
+        return;
+      }
+
+      // Parse first row to detect if it has headers
+      const firstRow = lines[0].toLowerCase();
+      const hasHeader =
+        firstRow.includes('topic') ||
+        firstRow.includes('category') ||
+        firstRow.includes('question') ||
+        firstRow.includes('front') ||
+        firstRow.includes('answer') ||
+        firstRow.includes('back');
+
+      let topicIdx = -1,
+        frontIdx = -1,
+        backIdx = -1;
+
+      if (hasHeader) {
+        // Normal case with header row
+        const headers = lines[0]
+          .toLowerCase()
+          .split(',')
+          .map((h) => h.trim());
+        topicIdx = headers.findIndex(
+          (h) => h === 'topic' || h === 'category' || h === 'group',
+        );
+        frontIdx = headers.findIndex(
+          (h) => h === 'question' || h === 'front' || h === 'q',
+        );
+        backIdx = headers.findIndex(
+          (h) => h === 'answer' || h === 'back' || h === 'a',
+        );
+      } else {
+        // No header → assume first 3 columns: Topic, Front, Back
+        topicIdx = 0;
+        frontIdx = 1;
+        backIdx = 2;
+      }
+
+      if (topicIdx === -1 || frontIdx === -1 || backIdx === -1) {
+        alert(
+          'CSV must have columns for Topic, Question/Front, and Answer/Back.\n\n' +
+            'Example with header:\nTopic,Question,Answer\n...\n\n' +
+            'Or without header (first 3 columns only):\nData Structures,What is a Stack?,LIFO...',
+        );
+        return;
+      }
+
+      let added = 0;
+      const startRow = hasHeader ? 1 : 0;
+
+      for (let i = startRow; i < lines.length; i++) {
+        // Better CSV splitting (handles commas inside quotes)
+        const values = lines[i]
+          .split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)
+          .map((v) => v.trim().replace(/^"|"$/g, ''));
+
+        if (values.length <= Math.max(topicIdx, frontIdx, backIdx)) continue;
+
+        const topic = values[topicIdx]?.trim();
+        const front = values[frontIdx]?.trim();
+        const back = values[backIdx]?.trim();
+
+        if (topic && front && back) {
+          await addDoc(
+            collection(db, 'artifacts', appId, 'public', 'data', 'flashcards'),
+            {
+              topic,
+              front,
+              back,
+              createdAt: serverTimestamp(),
+            },
+          );
+          added++;
+        }
+      }
+
+      if (added > 0) {
+        alert(`${added} flashcards added successfully!`);
+      } else {
+        alert('No valid flashcards found in the file.');
+      }
+    };
+
+    reader.readAsText(file);
+  };
+
+  const startFlashcardStudy = (topic) => {
+    const cards = flashcardsByTopic[topic] || [];
+    const shuffled = [...cards].sort(() => Math.random() - 0.5);
+    setStudySession(shuffled);
+    setSelectedFlashcardTopic(topic);
+    setCurrentFlashcardIndex(0);
+    setIsCardFlipped(false);
+  };
+
+  const handleFlip = () => setIsCardFlipped(!isCardFlipped);
+  const handleNext = () => {
+    if (currentFlashcardIndex < studySession.length - 1) {
+      setCurrentFlashcardIndex(currentFlashcardIndex + 1);
+      setIsCardFlipped(false);
+    }
+  };
+  const handlePrev = () => {
+    if (currentFlashcardIndex > 0) {
+      setCurrentFlashcardIndex(currentFlashcardIndex - 1);
+      setIsCardFlipped(false);
+    }
+  };
+  const handleMarkKnown = handleNext; // for now just go next
+  const handleShuffle = () => {
+    const shuffled = [...studySession].sort(() => Math.random() - 0.5);
+    setStudySession(shuffled);
+    setCurrentFlashcardIndex(0);
+    setIsCardFlipped(false);
+  };
+
+  const deleteFlashcards = async (ids) => {
+    if (!ids || ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} selected flashcards permanently?`))
+      return;
+
+    try {
+      for (const id of ids) {
+        await deleteDoc(
+          doc(db, 'artifacts', appId, 'public', 'data', 'flashcards', id),
+        );
+      }
+      alert(`${ids.length} flashcards deleted successfully!`);
+    } catch (error) {
+      alert('Error deleting: ' + error.message);
+    }
+  };
 
   // ====================== HANDLERS ======================
   const toggleMastery = async (id) => {
@@ -333,16 +509,22 @@ export default function App() {
       <Header
         isAdmin={isAdmin}
         currentTopic={currentTopic}
+        showFlashcards={showFlashcards}
         onReset={() => {
           setCurrentTopic(null);
           setActiveChapterId(null);
           setSearchQuery('');
+          setShowFlashcards(false);
+          setSelectedFlashcardTopic(null);
         }}
-        sortedTopics={sortedTopics}
-        onTopicSelect={(t) => {
-          setCurrentTopic(t);
+        onFlashcardsClick={() => {
+          setShowFlashcards(true);
+          setCurrentTopic(null);
           setSearchQuery('');
+          setSelectedFlashcardTopic(null);
         }}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
         onNewLesson={() => {
           setEditData({
             id: '',
@@ -353,48 +535,64 @@ export default function App() {
           setIsEditModalOpen(true);
         }}
         onReorderTopics={openReorderTopics}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
       />
 
       <main className="max-w-[1600px] mx-auto px-6 py-8">
-        {!currentTopic && !searchQuery && <WelcomeBanner />}
-
-        {/* Overall Progress */}
-        {!currentTopic && !searchQuery && chapters.length > 0 && (
-          <div className="mb-8 bg-white p-6 rounded-3xl border border-slate-200">
-            <div className="flex justify-between items-end mb-3">
-              <div className="text-sm font-bold text-slate-500">
-                OVERALL PROGRESS
-              </div>
-              <div className="text-4xl font-black text-indigo-600">
-                {overallProgress}%
-              </div>
-            </div>
-            <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-indigo-600 transition-all"
-                style={{ width: `${overallProgress}%` }}
-              />
-            </div>
-            {overallProgress < 100 && (
-              <button
-                onClick={continueLearning}
-                className="mt-4 w-full py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700"
-              >
-                Resume Learning →
-              </button>
-            )}
-          </div>
-        )}
-
-        {!currentTopic && !searchQuery ? (
-          <TopicGrid
-            sortedTopics={sortedTopics}
-            chapters={chapters}
-            masteredIds={masteredIds}
-            onSelectTopic={setCurrentTopic}
+        {showFlashcards ? (
+          <FlashcardsPage
+            isAdmin={isAdmin}
+            flashcardsByTopic={flashcardsByTopic}
+            flashcards={flashcards}
+            onUploadCSV={handleCSVUpload}
+            selectedTopic={selectedFlashcardTopic}
+            onSelectTopic={startFlashcardStudy}
+            onBackToDashboard={() => setShowFlashcards(false)}
+            studySession={studySession}
+            currentIndex={currentFlashcardIndex}
+            isFlipped={isCardFlipped}
+            onFlip={handleFlip}
+            onNext={handleNext}
+            onPrev={handlePrev}
+            onShuffle={handleShuffle}
+            onMarkKnown={handleMarkKnown}
+            onDeleteFlashcards={deleteFlashcards}
           />
+        ) : !currentTopic && !searchQuery ? (
+          <>
+            <WelcomeBanner />
+            {chapters.length > 0 && (
+              <div className="mb-8 bg-white p-6 rounded-3xl border border-slate-200">
+                <div className="flex justify-between items-end mb-3">
+                  <div className="text-sm font-bold text-slate-500">
+                    OVERALL PROGRESS
+                  </div>
+                  <div className="text-4xl font-black text-indigo-600">
+                    {overallProgress}%
+                  </div>
+                </div>
+                <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-600 transition-all"
+                    style={{ width: `${overallProgress}%` }}
+                  />
+                </div>
+                {overallProgress < 100 && (
+                  <button
+                    onClick={continueLearning}
+                    className="mt-4 w-full py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700"
+                  >
+                    Resume Learning →
+                  </button>
+                )}
+              </div>
+            )}
+            <TopicGrid
+              sortedTopics={sortedTopics}
+              chapters={chapters}
+              masteredIds={masteredIds}
+              onSelectTopic={setCurrentTopic}
+            />
+          </>
         ) : searchQuery ? (
           <SearchResults
             results={searchResults}

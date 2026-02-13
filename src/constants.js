@@ -1,2 +1,2 @@
 // YOUR UNIQUE ADMIN UID
-export const ADMIN_UID = 'HCXmb5iV5XezLb86PbPr9XTSDAg1';
+export const ADMIN_UID = 'sWncbq68p7SF0tkz8jfp04cgHaB2';
