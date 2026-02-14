@@ -15,6 +15,8 @@ import {
   onSnapshot,
   serverTimestamp,
   setDoc,
+  query,
+  where,
 } from 'firebase/firestore';
 
 import { firebaseConfig, appId, auth, db } from './config';
@@ -30,6 +32,11 @@ import EditModal from './components/EditModal';
 import ReorderTopicsModal from './components/ReorderTopicsModal';
 import SearchResults from './components/SearchResults';
 import FlashcardsPage from './components/FlashcardsPage';
+import JobsPage from './components/JobsPage';
+import CoursesPage from './components/CoursesPage';
+import ManageCourseModal from './components/ManageCourseModal';
+import NewJobModal from './components/NewJobModal';
+import NewCourseModal from './components/NewCourseModal';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -62,6 +69,15 @@ export default function App() {
   const [currentFlashcardIndex, setCurrentFlashcardIndex] = useState(0);
   const [isCardFlipped, setIsCardFlipped] = useState(false);
   const [flashcards, setFlashcards] = useState([]);
+
+  const [showCourses, setShowCourses] = useState(false);
+  const [showJobs, setShowJobs] = useState(false);
+  const [courses, setCourses] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [manageCourse, setManageCourse] = useState(null);
+  const [myEnrollments, setMyEnrollments] = useState({});
+  const [isNewJobModalOpen, setIsNewJobModalOpen] = useState(false);
+  const [isNewCourseModalOpen, setIsNewCourseModalOpen] = useState(false);
 
   const isAdmin = user && user.uid === ADMIN_UID;
 
@@ -127,6 +143,47 @@ export default function App() {
         setFlashcards(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       },
     );
+    return unsub;
+  }, [user]);
+
+  // ==================== COURSES & JOBS ====================
+  useEffect(() => {
+    if (!user) return;
+    const unsubCourses = onSnapshot(
+      collection(db, 'artifacts', appId, 'public', 'data', 'courses'),
+      (snap) => {
+        setCourses(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      },
+    );
+    const unsubJobs = onSnapshot(
+      collection(db, 'artifacts', appId, 'public', 'data', 'jobs'),
+      (snap) => {
+        setJobs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      },
+    );
+    return () => {
+      unsubCourses();
+      unsubJobs();
+    };
+  }, [user]);
+
+  // ==================== MY ENROLLMENTS (for user) ====================
+  useEffect(() => {
+    if (!user) {
+      setMyEnrollments({});
+      return;
+    }
+    const q = query(
+      collection(db, 'artifacts', appId, 'public', 'data', 'enrollments'),
+      where('uid', '==', user.uid),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => {
+        map[d.data().courseId] = d.data().status;
+      });
+      setMyEnrollments(map);
+    });
     return unsub;
   }, [user]);
 
@@ -319,6 +376,102 @@ export default function App() {
   };
 
   // ====================== HANDLERS ======================
+  // Jobs
+  const openNewJob = () => {
+    setIsNewJobModalOpen(true);
+  };
+
+  const handleSaveNewJob = async (jobData) => {
+    try {
+      await addDoc(
+        collection(db, 'artifacts', appId, 'public', 'data', 'jobs'),
+        {
+          designation: jobData.designation,
+          company: jobData.company || '',
+          startDate: jobData.startDate || '',
+          deadline: jobData.deadline,
+          link: jobData.link,
+          description: jobData.description || '',
+          postedAt: serverTimestamp(),
+        },
+      );
+      setIsNewJobModalOpen(false);
+      alert('Job posted successfully!');
+    } catch (error) {
+      alert('Error posting job: ' + error.message);
+    }
+  };
+
+  const deleteJob = async (id) => {
+    if (confirm('Delete this job?')) {
+      await deleteDoc(
+        doc(db, 'artifacts', appId, 'public', 'data', 'jobs', id),
+      );
+    }
+  };
+
+  // Courses
+  const openNewCourse = () => {
+    setIsNewCourseModalOpen(true);
+  };
+
+  const handleSaveNewCourse = async (courseData) => {
+    try {
+      await addDoc(
+        collection(db, 'artifacts', appId, 'public', 'data', 'courses'),
+        {
+          title: courseData.title,
+          description: courseData.description || '',
+          instructor: courseData.instructor || '',
+          duration: courseData.duration || '',
+          fee: courseData.fee || '',
+          level: courseData.level || 'beginner',
+          learningOutcomes: courseData.learningOutcomes || '',
+          prerequisites: courseData.prerequisites || '',
+          imageUrl: courseData.imageUrl || '',
+          maxStudents: courseData.maxStudents
+            ? parseInt(courseData.maxStudents)
+            : null,
+          createdAt: serverTimestamp(),
+        },
+      );
+      setIsNewCourseModalOpen(false);
+      alert('Course created successfully!');
+    } catch (error) {
+      alert('Error creating course: ' + error.message);
+    }
+  };
+
+  const enrollInCourse = async (courseId, userData) => {
+    if (!user) return alert('Please login first');
+
+    // Validate required enrollment data
+    if (!userData?.name?.trim()) {
+      return alert('Name is required to enroll');
+    }
+    if (!userData?.phone?.trim()) {
+      return alert('Phone number is required to enroll');
+    }
+
+    await addDoc(
+      collection(db, 'artifacts', appId, 'public', 'data', 'enrollments'),
+      {
+        courseId,
+        uid: user.uid,
+        status: 'pending',
+        enrolledAt: serverTimestamp(),
+        whatsapp: userData.phone.trim(),
+        name: userData.name.trim(),
+        phone: userData.phone.trim(),
+      },
+    );
+    alert('Enrollment request sent! Waiting for approval.');
+  };
+
+  const openManageCourse = (course) => {
+    setManageCourse(course);
+  };
+
   const toggleMastery = async (id) => {
     if (!user) return;
     const newMastered = masteredIds.includes(id)
@@ -510,18 +663,34 @@ export default function App() {
         isAdmin={isAdmin}
         currentTopic={currentTopic}
         showFlashcards={showFlashcards}
+        showCourses={showCourses}
+        showJobs={showJobs}
         onReset={() => {
           setCurrentTopic(null);
           setActiveChapterId(null);
           setSearchQuery('');
           setShowFlashcards(false);
+          setShowCourses(false);
+          setShowJobs(false);
           setSelectedFlashcardTopic(null);
         }}
         onFlashcardsClick={() => {
           setShowFlashcards(true);
+          setShowCourses(false);
+          setShowJobs(false);
           setCurrentTopic(null);
-          setSearchQuery('');
-          setSelectedFlashcardTopic(null);
+        }}
+        onCoursesClick={() => {
+          setShowCourses(true);
+          setShowFlashcards(false);
+          setShowJobs(false);
+          setCurrentTopic(null);
+        }}
+        onJobsClick={() => {
+          setShowJobs(true);
+          setShowFlashcards(false);
+          setShowCourses(false);
+          setCurrentTopic(null);
         }}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -538,7 +707,28 @@ export default function App() {
       />
 
       <main className="max-w-[1600px] mx-auto px-6 py-8">
-        {showFlashcards ? (
+        {showJobs ? (
+          <JobsPage
+            isAdmin={isAdmin}
+            jobs={jobs}
+            onNewJob={openNewJob}
+            onDeleteJob={deleteJob}
+          />
+        ) : showCourses ? (
+          <CoursesPage
+            isAdmin={isAdmin}
+            courses={courses}
+            myEnrollments={myEnrollments}
+            user={user}
+            onNewCourse={openNewCourse}
+            onEnroll={enrollInCourse}
+            onOpenManage={openManageCourse}
+            onDeleteCourse={() => {
+              // Course was deleted, just refresh UI
+              setCourses(courses.filter(() => true)); // This triggers re-render
+            }}
+          />
+        ) : showFlashcards ? (
           <FlashcardsPage
             isAdmin={isAdmin}
             flashcardsByTopic={flashcardsByTopic}
@@ -643,6 +833,13 @@ export default function App() {
             />
           </div>
         )}
+
+        {manageCourse && (
+          <ManageCourseModal
+            course={manageCourse}
+            onClose={() => setManageCourse(null)}
+          />
+        )}
       </main>
 
       <EditModal
@@ -660,6 +857,18 @@ export default function App() {
         tempTopicOrder={tempTopicOrder}
         setTempTopicOrder={setTempTopicOrder}
         onSave={saveTopicOrder}
+      />
+
+      <NewJobModal
+        isOpen={isNewJobModalOpen}
+        onClose={() => setIsNewJobModalOpen(false)}
+        onSave={handleSaveNewJob}
+      />
+
+      <NewCourseModal
+        isOpen={isNewCourseModalOpen}
+        onClose={() => setIsNewCourseModalOpen(false)}
+        onSave={handleSaveNewCourse}
       />
     </div>
   );
